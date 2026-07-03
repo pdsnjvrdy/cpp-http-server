@@ -4,28 +4,126 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <pthread.h>
 
-// simple function to get the file path from the GET request
-// example: "GET /index.html HTTP/1.1" -> returns "/index.html"
-void extract_path(char *request, char *path) {
-    // find the first space (after GET)
+// function to get the correct content type based on file extension
+const char* get_mime_type(char *path) {
+    char *ext = strrchr(path, '.');
+    if (!ext) return "text/plain";
+    
+    if (strcmp(ext, ".html") == 0 || strcmp(ext, ".htm") == 0)
+        return "text/html";
+    if (strcmp(ext, ".css") == 0)
+        return "text/css";
+    if (strcmp(ext, ".js") == 0)
+        return "application/javascript";
+    if (strcmp(ext, ".png") == 0)
+        return "image/png";
+    if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0)
+        return "image/jpeg";
+    if (strcmp(ext, ".txt") == 0)
+        return "text/plain";
+    
+    return "application/octet-stream";
+}
+
+void extract_path_and_method(char *request, char *method, char *path) {
+    // copy the method (GET, HEAD, etc.)
     char *first_space = strchr(request, ' ');
     if (!first_space) {
+        method[0] = '\0';
         path[0] = '\0';
         return;
     }
-    
-    // find the second space (before HTTP/1.1)
+    int method_len = first_space - request;
+    strncpy(method, request, method_len);
+    method[method_len] = '\0';
+
+    // find the path between first and second space
     char *second_space = strchr(first_space + 1, ' ');
     if (!second_space) {
         path[0] = '\0';
         return;
     }
+    int path_len = second_space - (first_space + 1);
+    strncpy(path, first_space + 1, path_len);
+    path[path_len] = '\0';
+}
+
+typedef struct {
+    int client_fd;
+} client_info;
+
+void* handle_client(void* arg) {
+    client_info *info = (client_info*)arg;
+    int client_fd = info->client_fd;
+    free(info);
+
+    char buffer[4096] = {0};
+    recv(client_fd, buffer, 4096, 0);
+
+    char method[16] = {0};
+    char path[256] = {0};
+    extract_path_and_method(buffer, method, path);
+
+    // default to index.html
+    if (strcmp(path, "/") == 0) {
+        strcpy(path, "/index.html");
+    }
+
+    // remove the leading "/" to get filename
+    char filename[256] = {0};
+    strcpy(filename, path + 1);
+
+    // check if the method is allowed (only GET and HEAD)
+    if (strcmp(method, "GET") != 0 && strcmp(method, "HEAD") != 0) {
+        char response[] = "HTTP/1.1 405 Method Not Allowed\r\n"
+                          "Content-Length: 0\r\n"
+                          "\r\n";
+        send(client_fd, response, strlen(response), 0);
+        close(client_fd);
+        return NULL;
+    }
+
+    FILE *file = fopen(filename, "rb");
     
-    // copy everything between the two spaces into path
-    int length = second_space - (first_space + 1);
-    strncpy(path, first_space + 1, length);
-    path[length] = '\0';
+    if (file == NULL) {
+        char response[] = "HTTP/1.1 404 Not Found\r\n"
+                          "Content-Type: text/html\r\n"
+                          "Content-Length: 20\r\n"
+                          "\r\n"
+                          "<h1>404 Not Found</h1>";
+        send(client_fd, response, strlen(response), 0);
+    } else {
+        fseek(file, 0, SEEK_END);
+        long file_size = ftell(file);
+        rewind(file);
+
+        // get the correct mime type
+        const char *mime = get_mime_type(filename);
+        // build header
+        char header[512];
+        snprintf(header, sizeof(header),
+                 "HTTP/1.1 200 OK\r\n"
+                 "Content-Type: %s\r\n"
+                 "Content-Length: %ld\r\n"
+                 "\r\n", mime, file_size);
+
+        send(client_fd, header, strlen(header), 0);
+
+        if (strcmp(method, "GET") == 0) {
+            char *file_content = (char *)malloc(file_size);
+            fread(file_content, 1, file_size, file);
+            send(client_fd, file_content, file_size, 0);
+            free(file_content);
+        }
+
+        fclose(file);
+    }
+
+    close(client_fd);
+    printf("client served: %s %s\n", method, path);
+    return NULL;
 }
 
 int main() {
@@ -64,61 +162,12 @@ int main() {
             continue;
         }
 
-        char buffer[4096] = {0};
-        recv(client_fd, buffer, 4096, 0);
+        client_info *info = (client_info*)malloc(sizeof(client_info));
+        info->client_fd = client_fd;
 
-        // extract the file path from the request
-        char path[256] = {0};
-        extract_path(buffer, path);
-
-        // default to index.html if path is just "/"
-        if (strcmp(path, "/") == 0) {
-            strcpy(path, "/index.html");
-        }
-
-        // remove the leading "/" to get the actual filename
-        char filename[256] = {0};
-        strcpy(filename, path + 1);
-
-        // try to open the file
-        FILE *file = fopen(filename, "rb");
-        
-        if (file == NULL) {
-            // file not found
-            char response[] = "HTTP/1.1 404 Not Found\r\n"
-                              "Content-Type: text/html\r\n"
-                              "Content-Length: 20\r\n"
-                              "\r\n"
-                              "<h1>404 Not Found</h1>";
-            send(client_fd, response, strlen(response), 0);
-        } else {
-            // move to the end of file to get its size
-            fseek(file, 0, SEEK_END);
-            long file_size = ftell(file);
-            rewind(file);
-
-            // read the whole file into memory
-            char *file_content = (char *)malloc(file_size);
-            fread(file_content, 1, file_size, file);
-
-            // HTTP response header
-            char header[256];
-            snprintf(header, sizeof(header), 
-                     "HTTP/1.1 200 OK\r\n"
-                     "Content-Type: text/html\r\n"
-                     "Content-Length: %ld\r\n"
-                     "\r\n", file_size);
-
-            
-            send(client_fd, header, strlen(header), 0);
-            send(client_fd, file_content, file_size, 0);
-
-            free(file_content);
-            fclose(file);
-        }
-
-        close(client_fd);
-        printf("client connected, requested: %s\n", path);
+        pthread_t thread;
+        pthread_create(&thread, NULL, handle_client, info);
+        pthread_detach(thread);
     }
 
     close(server_fd);
