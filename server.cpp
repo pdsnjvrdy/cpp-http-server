@@ -5,6 +5,29 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+// simple function to get the file path from the GET request
+// example: "GET /index.html HTTP/1.1" -> returns "/index.html"
+void extract_path(char *request, char *path) {
+    // find the first space (after GET)
+    char *first_space = strchr(request, ' ');
+    if (!first_space) {
+        path[0] = '\0';
+        return;
+    }
+    
+    // find the second space (before HTTP/1.1)
+    char *second_space = strchr(first_space + 1, ' ');
+    if (!second_space) {
+        path[0] = '\0';
+        return;
+    }
+    
+    // copy everything between the two spaces into path
+    int length = second_space - (first_space + 1);
+    strncpy(path, first_space + 1, length);
+    path[length] = '\0';
+}
+
 int main() {
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == 0) {
@@ -12,7 +35,6 @@ int main() {
         return 1;
     }
 
-    // reuse port so we don't get "address already in use" error on restart
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -33,13 +55,6 @@ int main() {
 
     printf("Server running on http://localhost:8080\n");
 
-    // HTML response for now
-    char response[] = "HTTP/1.1 200 OK\r\n"
-                      "Content-Type: text/html\r\n"
-                      "Content-Length: 19\r\n"
-                      "\r\n"
-                      "<h1>Hello World</h1>";
-
     while (1) {
         int addrlen = sizeof(address);
         int client_fd = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
@@ -49,16 +64,61 @@ int main() {
             continue;
         }
 
-        // ignore it for now
-        char buffer[1024] = {0};
-        recv(client_fd, buffer, 1024, 0);
+        char buffer[4096] = {0};
+        recv(client_fd, buffer, 4096, 0);
 
-        // hardcoded response
-        send(client_fd, response, strlen(response), 0);
+        // extract the file path from the request
+        char path[256] = {0};
+        extract_path(buffer, path);
+
+        // default to index.html if path is just "/"
+        if (strcmp(path, "/") == 0) {
+            strcpy(path, "/index.html");
+        }
+
+        // remove the leading "/" to get the actual filename
+        char filename[256] = {0};
+        strcpy(filename, path + 1);
+
+        // try to open the file
+        FILE *file = fopen(filename, "rb");
+        
+        if (file == NULL) {
+            // file not found
+            char response[] = "HTTP/1.1 404 Not Found\r\n"
+                              "Content-Type: text/html\r\n"
+                              "Content-Length: 20\r\n"
+                              "\r\n"
+                              "<h1>404 Not Found</h1>";
+            send(client_fd, response, strlen(response), 0);
+        } else {
+            // move to the end of file to get its size
+            fseek(file, 0, SEEK_END);
+            long file_size = ftell(file);
+            rewind(file);
+
+            // read the whole file into memory
+            char *file_content = (char *)malloc(file_size);
+            fread(file_content, 1, file_size, file);
+
+            // HTTP response header
+            char header[256];
+            snprintf(header, sizeof(header), 
+                     "HTTP/1.1 200 OK\r\n"
+                     "Content-Type: text/html\r\n"
+                     "Content-Length: %ld\r\n"
+                     "\r\n", file_size);
+
+            
+            send(client_fd, header, strlen(header), 0);
+            send(client_fd, file_content, file_size, 0);
+
+            free(file_content);
+            fclose(file);
+        }
 
         close(client_fd);
-        
-        printf("client connected and disconnected\n");
+        printf("client connected, requested: %s\n", path);
     }
 
     close(server_fd);
