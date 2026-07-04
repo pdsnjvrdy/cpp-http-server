@@ -59,70 +59,91 @@ void* handle_client(void* arg) {
     int client_fd = info->client_fd;
     free(info);
 
+    int keep_alive = 1;
     char buffer[4096] = {0};
-    recv(client_fd, buffer, 4096, 0);
 
-    char method[16] = {0};
-    char path[256] = {0};
-    extract_path_and_method(buffer, method, path);
-
-    // default to index.html
-    if (strcmp(path, "/") == 0) {
-        strcpy(path, "/index.html");
-    }
-
-    // remove the leading "/" to get filename
-    char filename[256] = {0};
-    strcpy(filename, path + 1);
-
-    // check if the method is allowed (only GET and HEAD)
-    if (strcmp(method, "GET") != 0 && strcmp(method, "HEAD") != 0) {
-        char response[] = "HTTP/1.1 405 Method Not Allowed\r\n"
-                          "Content-Length: 0\r\n"
-                          "\r\n";
-        send(client_fd, response, strlen(response), 0);
-        close(client_fd);
-        return NULL;
-    }
-
-    FILE *file = fopen(filename, "rb");
-    
-    if (file == NULL) {
-        char response[] = "HTTP/1.1 404 Not Found\r\n"
-                          "Content-Type: text/html\r\n"
-                          "Content-Length: 20\r\n"
-                          "\r\n"
-                          "<h1>404 Not Found</h1>";
-        send(client_fd, response, strlen(response), 0);
-    } else {
-        fseek(file, 0, SEEK_END);
-        long file_size = ftell(file);
-        rewind(file);
-
-        // get the correct mime type
-        const char *mime = get_mime_type(filename);
-        // build header
-        char header[512];
-        snprintf(header, sizeof(header),
-                 "HTTP/1.1 200 OK\r\n"
-                 "Content-Type: %s\r\n"
-                 "Content-Length: %ld\r\n"
-                 "\r\n", mime, file_size);
-
-        send(client_fd, header, strlen(header), 0);
-
-        if (strcmp(method, "GET") == 0) {
-            char *file_content = (char *)malloc(file_size);
-            fread(file_content, 1, file_size, file);
-            send(client_fd, file_content, file_size, 0);
-            free(file_content);
+    while (keep_alive) {
+        // clear the buffer for the next request
+        memset(buffer, 0, 4096);
+        
+        int bytes_read = recv(client_fd, buffer, 4096, 0);
+        if (bytes_read <= 0) {
+            break; // client disconnected
         }
 
-        fclose(file);
+        // check if the client wants to close the connection
+        if (strstr(buffer, "Connection: close") != NULL) {
+            keep_alive = 0;
+        }
+
+        char method[16] = {0};
+        char path[256] = {0};
+        extract_path_and_method(buffer, method, path);
+
+        // default to index.html
+        if (strcmp(path, "/") == 0) {
+            strcpy(path, "/index.html");
+        }
+
+        // remove the leading "/" to get filename
+        char filename[256] = {0};
+        strcpy(filename, path + 1);
+
+        // remove the leading "/" to get filename
+        if (strcmp(method, "GET") != 0 && strcmp(method, "HEAD") != 0) {
+            char response[] = "HTTP/1.1 405 Method Not Allowed\r\n"
+                              "Content-Length: 0\r\n"
+                              "\r\n";
+            send(client_fd, response, strlen(response), 0);
+            if (!keep_alive) break;
+            continue;
+        }
+
+        FILE *file = fopen(filename, "rb");
+        
+        if (file == NULL) {
+            char response[] = "HTTP/1.1 404 Not Found\r\n"
+                              "Content-Type: text/html\r\n"
+                              "Content-Length: 20\r\n"
+                              "\r\n"
+                              "<h1>404 Not Found</h1>";
+            send(client_fd, response, strlen(response), 0);
+        } else {
+            fseek(file, 0, SEEK_END);
+            long file_size = ftell(file);
+            rewind(file);
+
+            // get the correct mime type
+            const char *mime = get_mime_type(filename);
+            // build header
+            char header[512];
+            snprintf(header, sizeof(header),
+                     "HTTP/1.1 200 OK\r\n"
+                     "Content-Type: %s\r\n"
+                     "Content-Length: %ld\r\n"
+                     "Connection: %s\r\n"
+                     "\r\n", mime, file_size, keep_alive ? "keep-alive" : "close");
+
+            send(client_fd, header, strlen(header), 0);
+
+            if (strcmp(method, "GET") == 0) {
+                char *file_content = (char *)malloc(file_size);
+                fread(file_content, 1, file_size, file);
+                send(client_fd, file_content, file_size, 0);
+                free(file_content);
+            }
+
+            fclose(file);
+        }
+
+        // if client requested close, break the loop
+        if (!keep_alive) {
+            break;
+        }
     }
 
     close(client_fd);
-    printf("client served: %s %s\n", method, path);
+    printf("client disconnected\n");
     return NULL;
 }
 
