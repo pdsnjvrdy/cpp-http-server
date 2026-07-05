@@ -84,6 +84,18 @@ void* handle_client(void* arg) {
         char path[256] = {0};
         extract_path_and_method(buffer, method, path);
 
+        // log the request with timestamp
+        time_t now = time(NULL);
+        char *time_str = ctime(&now);
+        time_str[strlen(time_str) - 1] = '\0';  // remove newline
+        printf("[%s] %s %s\n", time_str, method, path);
+
+        // strip query string (anything after ?)
+        char *qmark = strchr(path, '?');
+        if (qmark) {
+            *qmark = '\0';
+        }
+
         // default to index.html
         if (strcmp(path, "/") == 0) {
             strcpy(path, "/index.html");
@@ -148,7 +160,6 @@ void* handle_client(void* arg) {
     }
 
     close(client_fd);
-    printf("client disconnected\n");
     return NULL;
 }
 
