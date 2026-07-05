@@ -5,6 +5,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/sendfile.h>
+#include <time.h>
 
 // function to get the correct content type based on file extension
 const char* get_mime_type(char *path) {
@@ -68,7 +72,7 @@ void* handle_client(void* arg) {
         
         int bytes_read = recv(client_fd, buffer, 4096, 0);
         if (bytes_read <= 0) {
-            break; // client disconnected
+            break;
         }
 
         // check if the client wants to close the connection
@@ -99,19 +103,21 @@ void* handle_client(void* arg) {
             continue;
         }
 
-        FILE *file = fopen(filename, "rb");
-        
-        if (file == NULL) {
+        // open file using open() instead of fopen()
+        int file_fd = open(filename, O_RDONLY);
+        if (file_fd == -1) {
             char response[] = "HTTP/1.1 404 Not Found\r\n"
                               "Content-Type: text/html\r\n"
                               "Content-Length: 20\r\n"
                               "\r\n"
                               "<h1>404 Not Found</h1>";
             send(client_fd, response, strlen(response), 0);
-        } else {
-            fseek(file, 0, SEEK_END);
-            long file_size = ftell(file);
-            rewind(file);
+        } 
+        else {
+            // get file size using fstat
+            struct stat file_stat;
+            fstat(file_fd, &file_stat);
+            long file_size = file_stat.st_size;
 
             // get the correct mime type
             const char *mime = get_mime_type(filename);
@@ -126,14 +132,13 @@ void* handle_client(void* arg) {
 
             send(client_fd, header, strlen(header), 0);
 
+            // if method is GET, use sendfile for zero-copy transfer
             if (strcmp(method, "GET") == 0) {
-                char *file_content = (char *)malloc(file_size);
-                fread(file_content, 1, file_size, file);
-                send(client_fd, file_content, file_size, 0);
-                free(file_content);
+                off_t offset = 0;
+                sendfile(client_fd, file_fd, &offset, file_size);
             }
 
-            fclose(file);
+            close(file_fd);
         }
 
         // if client requested close, break the loop
