@@ -1,7 +1,7 @@
-# HTTP/1.1 Static File Server in C
+# HTTP/1.1 Static File Server in C++
 ### Event‑driven architecture with epoll, zero‑copy sendfile, and persistent Keep‑Alive connections
 
-A high‑performance HTTP/1.1 static file server built from scratch in C using Linux sockets. The server uses an event‑driven, non‑blocking I/O architecture with `epoll` to handle concurrent connections efficiently, `sendfile()` for zero‑copy file transfers, and persistent Keep‑Alive connections to eliminate TCP handshake overhead.
+A high‑performance HTTP/1.1 static file server built from scratch in C++ using Linux sockets. The server uses an event‑driven, non‑blocking I/O architecture with `epoll` to handle concurrent connections efficiently, `sendfile()` for zero‑copy file transfers, and persistent Keep‑Alive connections to eliminate TCP handshake overhead.
 
 ---
 
@@ -37,7 +37,7 @@ cpp-http-server/
 ## Quick Start
 
 This project was developed and tested on **Ubuntu under WSL2**.  
-It will work on any system with **GCC, GNU Make, and a POSIX‑compatible environment** (Linux, WSL2, etc.).
+It will work on any system with **G++ and a POSIX‑compatible environment** (Linux, WSL2, etc.).
 
 ```bash
 # Clone and build
@@ -155,7 +155,7 @@ Benchmarks were executed on **Ubuntu 22.04 under WSL2** using localhost requests
 
 ## Proof – Screenshots
 
-These results were produced on **Ubuntu 22.04 under WSL2**. They can be reproduced on any machine with **GCC, GNU Make, and a POSIX‑compatible shell**.
+These results were produced on **Ubuntu 22.04 under WSL2**. They can be reproduced on any machine with **G++ and a POSIX‑compatible shell**.
 
 ### 1. Server Startup
 
@@ -233,7 +233,7 @@ A 50MB file is transferred using `sendfile()`. The kernel handles the entire tra
 
 ## Verification (Reproduce the Proofs)
 
-**Prerequisites:** Linux or WSL2, `g++`, GNU Make.
+**Prerequisites:** Linux or WSL2, `g++`.
 
 1. **Clone and build**
    ```bash
